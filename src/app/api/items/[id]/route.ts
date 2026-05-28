@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import sql from '@/lib/db';
+import { getDb } from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
 
 export async function PATCH(
   req: Request,
@@ -14,6 +16,7 @@ export async function PATCH(
 
   const { id } = await params;
   const { progress } = await req.json();
+  const sql = getDb();
 
   const rows = await sql`
     UPDATE learning_items
@@ -39,6 +42,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
+  const sql = getDb();
 
   await sql`
     DELETE FROM learning_items

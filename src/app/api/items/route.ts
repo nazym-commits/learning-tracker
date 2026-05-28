@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import sql from '@/lib/db';
+import { getDb } from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -9,6 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: 'Не авторизован' }, { status: 401 });
   }
 
+  const sql = getDb();
   const items = await sql`
     SELECT id, title, author, type, progress,
            EXTRACT(EPOCH FROM created_at) * 1000 AS "createdAt"
@@ -27,6 +30,7 @@ export async function POST(req: Request) {
   }
 
   const { title, author, type, progress } = await req.json();
+  const sql = getDb();
 
   const rows = await sql`
     INSERT INTO learning_items (user_id, title, author, type, progress)

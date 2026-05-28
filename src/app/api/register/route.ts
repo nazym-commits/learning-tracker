@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import sql from '@/lib/db';
+import { getDb } from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
   try {
@@ -13,6 +15,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Пароль минимум 6 символов' }, { status: 400 });
     }
 
+    const sql = getDb();
     const existing = await sql`SELECT id FROM users WHERE email = ${email.toLowerCase()}`;
     if (existing.length > 0) {
       return NextResponse.json({ error: 'Email уже зарегистрирован' }, { status: 409 });
