@@ -1,53 +1,35 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import { LearningItem, FilterType, SortOrder } from '@/types/learning';
 import StatsPanel from './StatsPanel';
 import FilterBar from './FilterBar';
 import ItemCard from './ItemCard';
 import AddItemModal from './AddItemModal';
 
-const STORAGE_KEY = 'learning-tracker-items';
 const THEME_KEY = 'learning-tracker-theme';
 
-const SAMPLE_ITEMS: LearningItem[] = [
-  { id: '1', title: 'Next.js 15 Complete Course', author: 'Vercel', type: 'course', progress: 65, createdAt: Date.now() - 86400000 * 5 },
-  { id: '2', title: 'Clean Code', author: 'Robert C. Martin', type: 'book', progress: 100, createdAt: Date.now() - 86400000 * 10 },
-  { id: '3', title: 'TypeScript Deep Dive', author: 'Basarat Ali', type: 'book', progress: 30, createdAt: Date.now() - 86400000 * 3 },
-  { id: '4', title: 'React Hooks Explained', author: 'Fireship', type: 'video', progress: 0, createdAt: Date.now() - 86400000 },
-  { id: '5', title: 'Syntax FM - CSS in 2025', author: 'Wes Bos & Scott', type: 'podcast', progress: 80, createdAt: Date.now() - 86400000 * 2 },
-];
-
 export default function LearningTracker() {
-  const [items, setItems] = useState<LearningItem[]>([]);
-  const [mounted, setMounted] = useState(false);
-  const [filter, setFilter] = useState<FilterType>('all');
-  const [sort, setSort] = useState<SortOrder>('newest');
+  const { data: session } = useSession();
+
+  const [items, setItems]       = useState<LearningItem[]>([]);
+  const [mounted, setMounted]   = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const [filter, setFilter]     = useState<FilterType>('all');
+  const [sort, setSort]         = useState<SortOrder>('newest');
   const [showModal, setShowModal] = useState(false);
-  const [search, setSearch] = useState('');
-  const [dark, setDark] = useState(false);
+  const [search, setSearch]     = useState('');
+  const [dark, setDark]         = useState(false);
 
+  // Theme
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try { setItems(JSON.parse(stored)); } catch { setItems(SAMPLE_ITEMS); }
-    } else {
-      setItems(SAMPLE_ITEMS);
-    }
-
-    const savedTheme = localStorage.getItem(THEME_KEY);
-    const isDark = savedTheme === 'dark';
+    const saved = localStorage.getItem(THEME_KEY);
+    const isDark = saved === 'dark';
     setDark(isDark);
     document.documentElement.classList.toggle('dark', isDark);
-
     setMounted(true);
   }, []);
-
-  useEffect(() => {
-    if (mounted) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    }
-  }, [items, mounted]);
 
   const toggleTheme = () => {
     const next = !dark;
@@ -56,28 +38,56 @@ export default function LearningTracker() {
     localStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
   };
 
-  const addItem = (data: Omit<LearningItem, 'id' | 'createdAt'>) => {
-    setItems((prev) => [{ ...data, id: crypto.randomUUID(), createdAt: Date.now() }, ...prev]);
+  // Load items from API
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    setLoading(true);
+    fetch('/api/items')
+      .then(r => r.json())
+      .then(data => {
+        setItems(Array.isArray(data) ? data.map(normalizeItem) : []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [session?.user?.id]);
+
+  const addItem = async (data: Omit<LearningItem, 'id' | 'createdAt'>) => {
+    const res  = await fetch('/api/items', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(data),
+    });
+    const item = await res.json();
+    setItems(prev => [normalizeItem(item), ...prev]);
   };
 
-  const updateProgress = (id: string, progress: number) => {
-    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, progress } : item)));
+  const updateProgress = async (id: string, progress: number) => {
+    // Optimistic update
+    setItems(prev => prev.map(i => i.id === id ? { ...i, progress } : i));
+    await fetch(`/api/items/${id}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ progress }),
+    });
   };
 
-  const deleteItem = (id: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
+  const deleteItem = async (id: string) => {
+    setItems(prev => prev.filter(i => i.id !== id));
+    await fetch(`/api/items/${id}`, { method: 'DELETE' });
   };
 
   const filteredAndSorted = useMemo(() => {
-    let result = filter !== 'all' ? items.filter((i) => i.type === filter) : items;
+    let result = filter !== 'all' ? items.filter(i => i.type === filter) : items;
     if (search.trim()) {
       const q = search.toLowerCase();
-      result = result.filter((i) => i.title.toLowerCase().includes(q) || i.author.toLowerCase().includes(q));
+      result = result.filter(
+        i => i.title.toLowerCase().includes(q) || i.author.toLowerCase().includes(q)
+      );
     }
     return [...result].sort((a, b) => {
       if (sort === 'progress-desc') return b.progress - a.progress;
-      if (sort === 'progress-asc') return a.progress - b.progress;
-      if (sort === 'oldest') return a.createdAt - b.createdAt;
+      if (sort === 'progress-asc')  return a.progress - b.progress;
+      if (sort === 'oldest')        return a.createdAt - b.createdAt;
       return b.createdAt - a.createdAt;
     });
   }, [items, filter, sort, search]);
@@ -85,7 +95,7 @@ export default function LearningTracker() {
   if (!mounted) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-gray-200 border-t-gray-800 dark:border-gray-700 dark:border-t-gray-200 rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-gray-200 border-t-gray-800 rounded-full animate-spin" />
       </div>
     );
   }
@@ -93,23 +103,24 @@ export default function LearningTracker() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
       <div className="max-w-6xl mx-auto px-4 py-5 sm:px-6">
+
         {/* Header */}
-        <div className="flex items-start justify-between mb-5">
+        <div className="flex items-center justify-between mb-5">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">
               Learning Tracker
             </h1>
             <p className="text-gray-500 dark:text-gray-400 mt-0.5 text-sm">
-              {items.length === 0
-                ? 'Начни отслеживать своё обучение'
-                : `${items.length} ${declension(items.length, ['материал', 'материала', 'материалов'])} в библиотеке`}
+              {session?.user?.name
+                ? `Привет, ${session.user.name} 👋`
+                : 'Привет!'}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Theme toggle */}
+            {/* Theme */}
             <button
               onClick={toggleTheme}
-              className="p-2 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-200"
+              className="p-2 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-all"
               title={dark ? 'Светлая тема' : 'Тёмная тема'}
             >
               {dark ? (
@@ -122,15 +133,27 @@ export default function LearningTracker() {
                 </svg>
               )}
             </button>
-            {/* Add button */}
+
+            {/* Add */}
             <button
               onClick={() => setShowModal(true)}
-              className="flex items-center gap-2 px-3.5 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-xl font-medium text-sm hover:bg-gray-700 dark:hover:bg-gray-100 active:scale-[0.97] transition-all duration-150 shadow-sm"
+              className="flex items-center gap-2 px-3.5 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-xl font-medium text-sm hover:bg-gray-700 dark:hover:bg-gray-100 active:scale-[0.97] transition-all shadow-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
               </svg>
               <span className="hidden sm:inline">Добавить</span>
+            </button>
+
+            {/* Sign out */}
+            <button
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="p-2 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 hover:border-red-200 dark:hover:border-red-800 transition-all"
+              title="Выйти"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </button>
           </div>
         </div>
@@ -141,25 +164,22 @@ export default function LearningTracker() {
             <StatsPanel items={items} />
           </div>
 
-          {/* Main content */}
+          {/* Main */}
           <div className="flex-1 min-w-0 space-y-3">
             {/* Search */}
             <div className="relative">
-              <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={e => setSearch(e.target.value)}
                 placeholder="Поиск по названию или автору..."
-                className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-gray-400 dark:focus:border-gray-500 transition-colors"
+                className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 outline-none focus:border-gray-400 transition-colors"
               />
               {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                >
+                <button onClick={() => setSearch('')} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -169,7 +189,11 @@ export default function LearningTracker() {
 
             <FilterBar filter={filter} sort={sort} onFilterChange={setFilter} onSortChange={setSort} />
 
-            {filteredAndSorted.length === 0 ? (
+            {loading ? (
+              <div className="flex justify-center py-16">
+                <div className="w-6 h-6 border-2 border-gray-200 border-t-gray-600 rounded-full animate-spin" />
+              </div>
+            ) : filteredAndSorted.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div className="text-5xl mb-4">
                   {search ? '🔍' : items.length === 0 ? '📖' : '🗂️'}
@@ -177,13 +201,13 @@ export default function LearningTracker() {
                 <p className="text-gray-700 dark:text-gray-300 font-medium">
                   {search ? 'Ничего не найдено' : items.length === 0 ? 'Библиотека пуста' : 'Нет материалов в этой категории'}
                 </p>
-                <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
+                <p className="text-sm text-gray-400 mt-1">
                   {search ? 'Попробуй другой запрос' : 'Нажми «Добавить», чтобы начать'}
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {filteredAndSorted.map((item) => (
+                {filteredAndSorted.map(item => (
                   <ItemCard key={item.id} item={item} onUpdateProgress={updateProgress} onDelete={deleteItem} />
                 ))}
               </div>
@@ -197,11 +221,26 @@ export default function LearningTracker() {
   );
 }
 
+// Normalize item from API (createdAt comes as float from DB)
+function normalizeItem(item: Record<string, unknown>): LearningItem {
+  return {
+    id:        item.id as string,
+    title:     item.title as string,
+    author:    (item.author as string) ?? '',
+    type:      item.type as LearningItem['type'],
+    progress:  Number(item.progress),
+    createdAt: Math.round(Number(item.createdAt)),
+  };
+}
+
 function declension(n: number, forms: [string, string, string]): string {
   const abs = Math.abs(n) % 100;
-  const mod10 = abs % 10;
+  const mod = abs % 10;
   if (abs > 10 && abs < 20) return forms[2];
-  if (mod10 > 1 && mod10 < 5) return forms[1];
-  if (mod10 === 1) return forms[0];
+  if (mod > 1 && mod < 5)   return forms[1];
+  if (mod === 1)             return forms[0];
   return forms[2];
 }
+
+// Used in subtitle
+void declension;
