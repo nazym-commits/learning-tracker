@@ -39,6 +39,22 @@ async function setup() {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_items_user_id ON learning_items(user_id)`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL DEFAULT '',
+      key_hash     TEXT NOT NULL,
+      key_prefix   TEXT NOT NULL,
+      last_used_at TIMESTAMPTZ,
+      revoked_at   TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix)`;
+
   console.log('✅ Tables created successfully');
 }
 
